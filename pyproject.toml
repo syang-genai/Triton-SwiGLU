@@ -1,0 +1,13 @@
+[project]
+name = "triton-swiglu"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.10.7",
+    "numpy>=2.3.3",
+    "pandas>=2.3.3",
+    "torch>=2.8.0",
+    "triton>=3.4.0",
+]
