@@ -155,9 +155,9 @@ def _swiglu_backward(
         mask_g = (offs_m_tile[None, :] < M) & (offs_n[:, None] < N)
 
         # load tiles
-        x = tl.load(x_ptrs, mask=mask_x, other=0.0)
-        g1 = tl.load(g1_ptrs, mask=mask_g, other=0.0)
-        g2 = tl.load(g2_ptrs, mask=mask_g, other=0.0)
+        x = tl.load(x_ptrs, mask=mask_x, other=0.0).to(tl.float32)
+        g1 = tl.load(g1_ptrs, mask=mask_g, other=0.0).to(tl.float32)
+        g2 = tl.load(g2_ptrs, mask=mask_g, other=0.0).to(tl.float32)
 
         # dot product: (N_tile, M_tile) × (M_tile, K_tile) -> (N_tile, K_tile)
         dw1_acc = tl.dot(g1, x, dw1_acc)
@@ -314,8 +314,8 @@ def test(x, do, dim, hidden_dim):
 def bench_swiglu(batch_size, seq_len, dim, hidden_dim, provider, device, quantiles):
     def fwd_bwd():
         if provider == "triton":
-            x=torch.randn(batch_size*seq_len, dim, device=device)
-            do=torch.randn(batch_size*seq_len, hidden_dim, device=device)
+            x=torch.randn(batch_size*seq_len, dim, device=device, dtype=torch.float32)
+            do=torch.randn(batch_size*seq_len, hidden_dim, device=device, dtype=torch.float32)
             swiglu_triton=SwiGLU_Layer_Triton(dim, hidden_dim).to(device)
             out_triton=swiglu_triton(x)
             out_triton.backward(do, retain_graph=True)
@@ -323,8 +323,8 @@ def bench_swiglu(batch_size, seq_len, dim, hidden_dim, provider, device, quantil
 
 
         if provider == "torch":
-            x=torch.randn((batch_size*seq_len, dim),device=device)
-            do=torch.randn((batch_size*seq_len, hidden_dim),device=device)
+            x=torch.randn((batch_size*seq_len, dim),device=device, dtype=torch.float32)
+            do=torch.randn((batch_size*seq_len, hidden_dim),device=device, dtype=torch.float32)
             swiglu_pytorch=SwiGLU_Layer_Pytorch(dim, hidden_dim).to(device)
             out_torch=swiglu_pytorch(x)
             out_torch.backward(do, retain_graph=True)
@@ -345,12 +345,12 @@ if __name__ == "__main__":
     
     batch_size=16
     seq_len=1024
-    dim=256
+    dim=420
     hidden_dim=int(dim*2/3)
     # print("hidden_dim", hidden_dim)
     
-    x=torch.randn(batch_size*seq_len, dim, device=DEVICE)
-    do=torch.randn(batch_size*seq_len, hidden_dim, device=DEVICE)
+    x=torch.randn(batch_size*seq_len, dim, device=DEVICE, dtype=torch.float32)
+    do=torch.randn(batch_size*seq_len, hidden_dim, device=DEVICE, dtype=torch.float32)
     test(x, do, dim, hidden_dim)
     
     # bench_swiglu.run(save_path=".", show_plots=True, print_data=True)
