@@ -52,6 +52,8 @@ def _swiglu_forward(x_ptr,w1_ptr,w2_ptr,o_ptr,z1_ptr,z2_ptr,g1_ptr,g2_ptr,
     pid_n=tl.program_id(axis=1)
     pid=pid_m*BLOCK_SIZE_M+pid_n*BLOCK_SIZE_N
 
+    # pid=tl.program_id(axis=0)
+
     num_pid_m=tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n=tl.cdiv(N, BLOCK_SIZE_N)
 
@@ -68,13 +70,13 @@ def _swiglu_forward(x_ptr,w1_ptr,w2_ptr,o_ptr,z1_ptr,z2_ptr,g1_ptr,g2_ptr,
     offs_wn=(pid_n*BLOCK_SIZE_N+tl.arange(0,BLOCK_SIZE_N))%N
     offs_k=tl.arange(0,BLOCK_SIZE_K)
 
-    x_ptrs=x_ptr+offs_xm[:,None]*stridexm+offs_k[None,:]*stridexk 
+    x_ptrs=x_ptr+offs_xm[:,None]*stridexm+offs_k[None,:]*stridexk # x:(m,k)
     
-    w1_ptrs=w1_ptr+offs_k[:,None]*stridewk+offs_wn[None,:]*stridewn
-    w2_ptrs=w2_ptr+offs_k[:,None]*stridewk+offs_wn[None,:]*stridewn
+    w1_ptrs=w1_ptr+offs_k[:,None]*stridewk+offs_wn[None,:]*stridewn # w1:(k,n)
+    w2_ptrs=w2_ptr+offs_k[:,None]*stridewk+offs_wn[None,:]*stridewn # w2:(k,n)
     
 
-    accumulator=tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    o_accumulator=tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     z1_accumulator=tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     z2_accumulator=tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
     g1_accumulator=tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
@@ -91,26 +93,26 @@ def _swiglu_forward(x_ptr,w1_ptr,w2_ptr,o_ptr,z1_ptr,z2_ptr,g1_ptr,g2_ptr,
         z2=tl.dot(x,w2) # x:(m,k)*w1:(k,n)=z:(m,n)
         g1=z2*tl.sigmoid(z2) # g1:(m,n)
         g2=z1*tl.sigmoid(z2)*(1+z2*(1-tl.sigmoid(z2))) #g2:(m,n)
-
-        accumulator+=z1*g1
+    
+        o_accumulator+=z1*g1
         z1_accumulator+=z1
         z2_accumulator+=z2
         g1_accumulator+=g1
         g2_accumulator+=g2
         
         # update x, w1 and w2 pointers
-        x_ptrs+=offs_k[None,:]*stridexk
-        w1_ptrs+=offs_k[:,None]*stridewk
-        w2_ptrs+=offs_k[:,None]*stridewk
+        x_ptrs+=BLOCK_SIZE_K*stridexk
+        w1_ptrs+=BLOCK_SIZE_K*stridewk
+        w2_ptrs+=BLOCK_SIZE_K*stridewk
 
-    o=accumulator.to(tl.float16)
+    o=o_accumulator.to(tl.float16)
     z1=z1_accumulator.to(tl.float16)
     z2=z2_accumulator.to(tl.float16)
     g1=g1_accumulator.to(tl.float16)
     g2=g2_accumulator.to(tl.float16)
 
-    offs_om=(pid_m*BLOCK_SIZE_M+tl.arange(0,BLOCK_SIZE_M))%M
-    offs_on=(pid_n*BLOCK_SIZE_N+tl.arange(0,BLOCK_SIZE_N))%N
+    offs_om=pid_m*BLOCK_SIZE_M+tl.arange(0,BLOCK_SIZE_M)
+    offs_on=pid_n*BLOCK_SIZE_N+tl.arange(0,BLOCK_SIZE_N)
     
     o_ptrs=o_ptr+offs_om[:,None]*strideom+offs_on[None,:]*strideon
     z1_ptrs=z1_ptr+offs_om[:,None]*strideom+offs_on[None,:]*strideon
@@ -236,7 +238,7 @@ class SwiGLU(torch.autograd.Function):
     g2=torch.zeros_like(o, device=o.device, dtype=o.dtype)
 
     grid=lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']), triton.cdiv(N, META['BLOCK_SIZE_N']))
-    
+
     _swiglu_forward[grid](x,w1.transpose(1,0).contiguous(),w2.transpose(1,0).contiguous(),o,z1,z2,g1,g2,
                           M,N,K,
                           stridexm=x.stride(0), stridexk=x.stride(1),
@@ -263,7 +265,6 @@ class SwiGLU(torch.autograd.Function):
     # print("M","N","K",ctx.M,ctx.N,ctx.K)
     # (m,k) (m,n)-->(k,n)
     grid=lambda META: (triton.cdiv(ctx.K, META['BLOCK_SIZE_K']), triton.cdiv(ctx.N, META['BLOCK_SIZE_N']))
-
     _swiglu_backward[grid](x,dw1.transpose(1,0).contiguous(),dw2.transpose(1,0).contiguous(),
                            z1,z2,g1,g2,
                            ctx.M,ctx.N,ctx.K,
@@ -317,6 +318,9 @@ def test(x, do, dim, hidden_dim):
     torch.cuda.synchronize()
     print("out_triton",out_triton.shape, out_triton[:4,:4])
     print("out_torch",out_torch.shape, out_torch[:4,:4])
+    max_diff = (out_triton - out_torch).abs().max()
+    mean_diff = (out_triton - out_torch).abs().mean()
+    print(max_diff, mean_diff)
     # assert torch.allclose(out_triton,out_torch, rtol=1e-05, atol=1e-08, equal_nan=True), "output discripency"
     
     out_triton.backward(do, retain_graph=True)
@@ -384,10 +388,10 @@ if __name__ == "__main__":
     seq_len=1024
     dim=512
     hidden_dim=int(dim*2/3)
-    print("hidden_dim", hidden_dim)
+    # print("hidden_dim", hidden_dim)
     
     x=torch.randn(batch_size*seq_len, dim, device=DEVICE)
     do=torch.randn(batch_size*seq_len, hidden_dim, device=DEVICE)
-    # test(x, do, dim, hidden_dim)
+    test(x, do, dim, hidden_dim)
     
-    bench_swiglu.run(save_path=".", show_plots=True, print_data=True)
+    # bench_swiglu.run(save_path=".", show_plots=True, print_data=True)
