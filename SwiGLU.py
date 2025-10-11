@@ -240,7 +240,7 @@ class SwiGLU(torch.autograd.Function):
     _swiglu_forward[grid](x,w1.transpose(1,0).contiguous(),w2.transpose(1,0).contiguous(),o,z1,z2,g1,g2,
                           M,N,K,
                           stridexm=x.stride(0), stridexk=x.stride(1),
-                          stridewk=w1.stride(0), stridewn=w1.stride(1),
+                          stridewk=w1.stride(1), stridewn=w1.stride(0), #wk transposed
                           strideom=o.stride(0), strideon=o.stride(1))
 
     ctx.save_for_backward(x,z1,z2,g1,g2)
@@ -268,7 +268,7 @@ class SwiGLU(torch.autograd.Function):
                            z1,z2,g1,g2,
                            ctx.M,ctx.N,ctx.K,
                            stridexm=x.stride(0), stridexk=x.stride(1),
-                           stridewk=dw1.stride(0), stridewn=dw1.stride(1),
+                           stridewk=dw1.stride(1), stridewn=dw1.stride(0), # stride transposed 
                            stridezm=z1.stride(0),stridezn=z1.stride(1))
     # print("complete backward")
     return None, dw1, dw2
@@ -313,7 +313,6 @@ def test(x, do, dim, hidden_dim):
     assert torch.allclose(swiglu_triton.w2.weight, swiglu_pytorch.w2.weight, rtol=1e-03, atol=1e-05, equal_nan=True), "forward w2 discripency"
     
     out_triton=swiglu_triton(x)
-    torch.cuda.synchronize()
     out_torch=swiglu_pytorch(x)
     torch.cuda.synchronize()
     print("out_triton",out_triton.shape, out_triton[:4,:4])
@@ -333,8 +332,8 @@ def test(x, do, dim, hidden_dim):
     triton.testing.Benchmark(
         x_names=['dim', 'hidden_dim'],
         x_vals=[
-            (d, int(d))
-            for d in [512, 1024, 2048, 4096, 8192, 16384]
+            (d, int(d*2/3))
+            for d in [512, 1024, 2048, 4096]
         ],
         line_arg='provider',
         line_vals=['triton', 'torch'],
@@ -352,11 +351,10 @@ def test(x, do, dim, hidden_dim):
 def bench_swiglu(batch_size, seq_len, dim, hidden_dim, provider, device, quantiles):
     def fwd_bwd():
         if provider == "triton":
-            x=torch.randn((batch_size*seq_len, dim),device=device)
-            do=torch.randn((batch_size*seq_len, hidden_dim),device=device)
+            x=torch.randn(batch_size*seq_len, dim, device=device)
+            do=torch.randn(batch_size*seq_len, hidden_dim, device=device)
             swiglu_triton=SwiGLU_Layer_Triton(dim, hidden_dim).to(device)
             out_triton=swiglu_triton(x)
-            torch.cuda.synchronize()
             out_triton.backward(do, retain_graph=True)
             torch.cuda.synchronize()
 
@@ -366,7 +364,6 @@ def bench_swiglu(batch_size, seq_len, dim, hidden_dim, provider, device, quantil
             do=torch.randn((batch_size*seq_len, hidden_dim),device=device)
             swiglu_pytorch=SwiGLU_Layer_Pytorch(dim, hidden_dim).to(device)
             out_torch=swiglu_pytorch(x)
-            torch.cuda.synchronize()
             out_torch.backward(do, retain_graph=True)
             torch.cuda.synchronize()
         return
@@ -385,12 +382,12 @@ if __name__ == "__main__":
     
     batch_size=16
     seq_len=1024
-    dim=1024
-    hidden_dim=512
-    # print("hidden_dim", hidden_dim)
+    dim=512
+    hidden_dim=int(dim*2/3)
+    print("hidden_dim", hidden_dim)
     
     x=torch.randn(batch_size*seq_len, dim, device=DEVICE)
     do=torch.randn(batch_size*seq_len, hidden_dim, device=DEVICE)
-    test(x, do, dim, hidden_dim)
+    # test(x, do, dim, hidden_dim)
     
-    # bench_swiglu.run(save_path=".", show_plots=True, print_data=True)
+    bench_swiglu.run(save_path=".", show_plots=True, print_data=True)
