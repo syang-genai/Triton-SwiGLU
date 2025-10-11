@@ -36,7 +36,7 @@ def get_autotune_config():
 )
 @triton.jit
 def _swiglu_forward(
-    x_ptr, w1_ptr, w2_ptr, o_ptr, z1_ptr, z2_ptr, g1_ptr, g2_ptr,
+    x_ptr, w1_ptr, w2_ptr, o_ptr, g1_ptr, g2_ptr,
     M, N, K,
     stridexm, stridexk,
     stridewk, stridewn,
@@ -92,22 +92,22 @@ def _swiglu_forward(
     swish_z2 = z2 * sigmoid_z2
     o = z1 * swish_z2
 
+    g1 = swish_z2          # save swish(z2) (could also save sigmoid only)
     # optionally compute values useful for backward
     swish_prime = sigmoid_z2 + z2 * sigmoid_z2 * (1 - sigmoid_z2)  # swish'(z2)
-    g1 = swish_z2          # save swish(z2) (could also save sigmoid only)
     g2 = z1 * swish_prime  # save z1 * swish'(z2)
 
     # compute output pointers
     o_ptrs  = o_ptr  + offs_m[:, None] * strideom + offs_n[None, :] * strideon
-    z1_ptrs = z1_ptr + offs_m[:, None] * strideom + offs_n[None, :] * strideon
-    z2_ptrs = z2_ptr + offs_m[:, None] * strideom + offs_n[None, :] * strideon
+    # z1_ptrs = z1_ptr + offs_m[:, None] * strideom + offs_n[None, :] * strideon
+    # z2_ptrs = z2_ptr + offs_m[:, None] * strideom + offs_n[None, :] * strideon
     g1_ptrs = g1_ptr + offs_m[:, None] * strideom + offs_n[None, :] * strideon
     g2_ptrs = g2_ptr + offs_m[:, None] * strideom + offs_n[None, :] * strideon
 
     mask_store = (offs_m[:, None] < M) & (offs_n[None, :] < N)
     tl.store(o_ptrs,  o,  mask=mask_store)
-    tl.store(z1_ptrs, z1, mask=mask_store)
-    tl.store(z2_ptrs, z2, mask=mask_store)
+    # tl.store(z1_ptrs, z1, mask=mask_store)
+    # tl.store(z2_ptrs, z2, mask=mask_store)
     tl.store(g1_ptrs, g1, mask=mask_store)
     tl.store(g2_ptrs, g2, mask=mask_store)
     return 
@@ -186,20 +186,20 @@ class SwiGLU(torch.autograd.Function):
     o=torch.zeros([M,N], device=x.device, dtype=x.dtype)# o: batch_size*nhead*seq_len, hidden_dim
     # print("o shape",o.shape)
     
-    z1=torch.zeros_like(o, device=o.device, dtype=o.dtype)
-    z2=torch.zeros_like(o, device=o.device, dtype=o.dtype)
+    # z1=torch.zeros_like(o, device=o.device, dtype=o.dtype)
+    # z2=torch.zeros_like(o, device=o.device, dtype=o.dtype)
     g1=torch.zeros_like(o, device=o.device, dtype=o.dtype)
     g2=torch.zeros_like(o, device=o.device, dtype=o.dtype)
 
     grid=lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']), triton.cdiv(N, META['BLOCK_SIZE_N']))
 
-    _swiglu_forward[grid](x,w1,w2,o,z1,z2,g1,g2,
+    _swiglu_forward[grid](x,w1,w2,o,g1,g2,
                           M,N,K,
                           stridexm=x.stride(0), stridexk=x.stride(1),
                           stridewk=w1.stride(0), stridewn=w1.stride(1),  
                           strideom=o.stride(0), strideon=o.stride(1))
 
-    ctx.save_for_backward(x,z1,z2,g1,g2)
+    ctx.save_for_backward(x,g1,g2)
     ctx.M, ctx.N, ctx.K=M, N, K 
     # print("M","N","K",M,N,K)
     return o
@@ -208,7 +208,7 @@ class SwiGLU(torch.autograd.Function):
   @staticmethod
   def backward(ctx, do):
     # print("backward start")
-    x,z1,z2,g1,g2=ctx.saved_tensors # X: (M,K), Z:(M,N), G:(M,N)
+    x,g1,g2=ctx.saved_tensors # X: (M,K), Z:(M,N), G:(M,N)
 
     dw1=torch.empty((ctx.N, ctx.K), device=x.device, dtype=x.dtype) 
     dw2=torch.empty((ctx.N, ctx.K), device=x.device, dtype=x.dtype) 
@@ -345,7 +345,7 @@ if __name__ == "__main__":
     
     batch_size=16
     seq_len=1024
-    dim=420
+    dim=1024
     hidden_dim=int(dim*2/3)
     # print("hidden_dim", hidden_dim)
     
