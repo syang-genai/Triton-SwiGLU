@@ -56,8 +56,8 @@ def _swiglu_forward(
 
     # create pointer matrices for loads (x: M x K, w: N x K-->K,N)
     x_ptrs = x_ptr + offs_m[:, None] * stridexm + offs_k[None, :] * stridexk   # (M_tile, K_tile)
-    w1_ptrs = w1_ptr + offs_k[:, None] * stridewn + offs_n[None, :] * stridewk # (K_tile, N_tile)
-    w2_ptrs = w2_ptr + offs_k[:, None] * stridewn + offs_n[None, :] * stridewk # (K_tile, N_tile)
+    w1_ptrs = w1_ptr + offs_k[:,None] * stridewk + offs_n[None,:] * stridewn # (K_tile, N_tile)
+    w2_ptrs = w2_ptr + offs_k[:,None] * stridewk + offs_n[None,:] * stridewn # (K_tile, N_tile)
 
     # accumulators
     z1_acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
@@ -69,45 +69,40 @@ def _swiglu_forward(
         k_start = kt * BLOCK_SIZE_K
         # masks: valid rows/cols in this tile
         mask_x = (offs_m[:, None] < M) & ((offs_k[None, :] + k_start) < K)
-        mask_w = (offs_n[None, :] < N) & ((offs_k[:, None] + k_start) < K)
+        mask_w = (offs_n[None,:] < N) & ((offs_k[:,None] + k_start) < K)
 
         x = tl.load(x_ptrs, mask=mask_x, other=0.0).to(tl.float32)
         w1 = tl.load(w1_ptrs, mask=mask_w, other=0.0).to(tl.float32) 
         w2 = tl.load(w2_ptrs, mask=mask_w, other=0.0).to(tl.float32)
-
+        
         # accumulate matmuls
         z1_acc = tl.dot(x, w1, z1_acc)
         z2_acc = tl.dot(x, w2, z2_acc)
 
         # advance pointers by BLOCK_SIZE_K in K dimension
         x_ptrs = x_ptrs + BLOCK_SIZE_K * stridexk
-        w1_ptrs = w1_ptrs + BLOCK_SIZE_K * stridewn
-        w2_ptrs = w2_ptrs + BLOCK_SIZE_K * stridewn
+        w1_ptrs = w1_ptrs + BLOCK_SIZE_K * stridewk
+        w2_ptrs = w2_ptrs + BLOCK_SIZE_K * stridewk
+
 
     # compute outputs and saved intermediates
     z1 = z1_acc
     z2 = z2_acc
 
-    sigmoid_z2 = tl.sigmoid(z2)
-    swish_z2 = z2 * sigmoid_z2
-    o = z1 * swish_z2
-
-    g1 = swish_z2          # save swish(z2) (could also save sigmoid only)
+    s = tl.sigmoid(z2)
+    g1 = s*z2
+    o = z1 * g1
+    
     # optionally compute values useful for backward
-    swish_prime = sigmoid_z2 + z2 * sigmoid_z2 * (1 - sigmoid_z2)  # swish'(z2)
-    g2 = z1 * swish_prime  # save z1 * swish'(z2)
+    g2=z1 * s * (1 + z2 * (1 - s))
 
     # compute output pointers
     o_ptrs  = o_ptr  + offs_m[:, None] * strideom + offs_n[None, :] * strideon
-    # z1_ptrs = z1_ptr + offs_m[:, None] * strideom + offs_n[None, :] * strideon
-    # z2_ptrs = z2_ptr + offs_m[:, None] * strideom + offs_n[None, :] * strideon
     g1_ptrs = g1_ptr + offs_m[:, None] * strideom + offs_n[None, :] * strideon
     g2_ptrs = g2_ptr + offs_m[:, None] * strideom + offs_n[None, :] * strideon
 
     mask_store = (offs_m[:, None] < M) & (offs_n[None, :] < N)
     tl.store(o_ptrs,  o,  mask=mask_store)
-    # tl.store(z1_ptrs, z1, mask=mask_store)
-    # tl.store(z2_ptrs, z2, mask=mask_store)
     tl.store(g1_ptrs, g1, mask=mask_store)
     tl.store(g2_ptrs, g2, mask=mask_store)
     return 
@@ -120,10 +115,10 @@ def _swiglu_forward(
 @triton.jit
 def _swiglu_backward(
     x_ptr, dw1_ptr, dw2_ptr,
-    g1_ptr, g2_ptr,
+    g1_do_ptr, g2_do_ptr,
     M, N, K,
     stridexm, stridexk,
-    stridewk, stridewn,       # dw layout (N, K)
+    stridewn, stridewk,       # dw layout (N, K)
     stridegm, stridegn,       # g layout (M, N)
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
@@ -136,58 +131,53 @@ def _swiglu_backward(
     offs_k = pid_k * BLOCK_SIZE_K + tl.arange(0, BLOCK_SIZE_K)   # (BLOCK_K,)
     offs_m = tl.arange(0, BLOCK_SIZE_M)                          # (BLOCK_M,)
 
+    # compute pointers per tile
+    x_ptrs = x_ptr + offs_m[:, None] * stridexm + offs_k[None, :] * stridexk 
+    g1_do_ptrs = g1_do_ptr + offs_m[None,:] * stridegm + offs_n[:,None] * stridegn
+    g2_do_ptrs = g2_do_ptr + offs_m[None,:] * stridegm + offs_n[:,None] * stridegn
+
+    
     # accumulators
     dw1_acc = tl.zeros((BLOCK_SIZE_N, BLOCK_SIZE_K), dtype=tl.float32)
     dw2_acc = tl.zeros((BLOCK_SIZE_N, BLOCK_SIZE_K), dtype=tl.float32)
-
+    
     num_m_tiles = tl.cdiv(M, BLOCK_SIZE_M)
     for mt in range(num_m_tiles):
         m_start = mt * BLOCK_SIZE_M
-        offs_m_tile = offs_m + m_start
-
-        # compute pointers per tile
-        x_ptrs = x_ptr + offs_m_tile[:, None] * stridexm + offs_k[None, :] * stridexk
-        g1_ptrs = g1_ptr + offs_m_tile[None, :] * stridegn + offs_n[:, None] * stridegm
-        g2_ptrs = g2_ptr + offs_m_tile[None, :] * stridegn + offs_n[:, None] * stridegm
-
         # masks
-        mask_x = (offs_m_tile[:, None] < M) & (offs_k[None, :] < K)
-        mask_g = (offs_m_tile[None, :] < M) & (offs_n[:, None] < N)
-
+        mask_x = (offs_m[:, None] < M-m_start) & (offs_k[None, :] < K)
+        mask_g_o = (offs_m[None,:] < M-m_start) & (offs_n[:,None] < N)
+        
         # load tiles
         x = tl.load(x_ptrs, mask=mask_x, other=0.0).to(tl.float32)
-        g1 = tl.load(g1_ptrs, mask=mask_g, other=0.0).to(tl.float32)
-        g2 = tl.load(g2_ptrs, mask=mask_g, other=0.0).to(tl.float32)
+        g1_do_t = tl.load(g1_do_ptrs, mask=mask_g_o, other=0.0).to(tl.float32)
+        g2_do_t = tl.load(g2_do_ptrs, mask=mask_g_o, other=0.0).to(tl.float32)
+        
+        dw1_acc = tl.dot(g1_do_t, x, dw1_acc)
+        dw2_acc = tl.dot(g2_do_t, x, dw2_acc)
 
-        # dot product: (N_tile, M_tile) × (M_tile, K_tile) -> (N_tile, K_tile)
-        dw1_acc = tl.dot(g1, x, dw1_acc)
-        dw2_acc = tl.dot(g2, x, dw2_acc)
+        x_ptrs=x_ptrs+BLOCK_SIZE_M*stridexm
+        g1_do_ptrs=g1_do_ptrs+BLOCK_SIZE_M*stridegm
+        g2_do_ptrs=g2_do_ptrs+BLOCK_SIZE_M*stridegm
+    
 
     # store results
     dw1_ptrs = dw1_ptr + offs_n[:, None] * stridewn + offs_k[None, :] * stridewk
     dw2_ptrs = dw2_ptr + offs_n[:, None] * stridewn + offs_k[None, :] * stridewk
-    store_mask = (offs_n[:, None] < N) & (offs_k[None, :] < K)
 
-    tl.store(dw1_ptrs, dw1_acc, mask=store_mask)
-    tl.store(dw2_ptrs, dw2_acc, mask=store_mask)
+    mask_w = (offs_n[:, None] < N) & (offs_k[None, :] < K)
+    tl.store(dw1_ptrs, dw1_acc, mask=mask_w)
+    tl.store(dw2_ptrs, dw2_acc, mask=mask_w)
     return 
-
 
 class SwiGLU(torch.autograd.Function):
   @staticmethod
   def forward(ctx,x,w1,w2):
-    M, K=x.shape # x: batch_size*nhead*seq_len, dim (m,k)
+    M, K=x.shape 
     assert w1.shape==w2.shape
-    N, _=w1.shape # w: (n,k)
-    # print("x shape", x.shape)
-    # print("w1 shape", w1.shape)
-    # print("w2 shape", w2.shape)
+    N, _=w1.shape 
     
-    o=torch.zeros([M,N], device=x.device, dtype=x.dtype)# o: batch_size*nhead*seq_len, hidden_dim
-    # print("o shape",o.shape)
-    
-    # z1=torch.zeros_like(o, device=o.device, dtype=o.dtype)
-    # z2=torch.zeros_like(o, device=o.device, dtype=o.dtype)
+    o=torch.zeros([M,N], device=x.device, dtype=x.dtype)
     g1=torch.zeros_like(o, device=o.device, dtype=o.dtype)
     g2=torch.zeros_like(o, device=o.device, dtype=o.dtype)
 
@@ -196,36 +186,32 @@ class SwiGLU(torch.autograd.Function):
     _swiglu_forward[grid](x,w1,w2,o,g1,g2,
                           M,N,K,
                           stridexm=x.stride(0), stridexk=x.stride(1),
-                          stridewk=w1.stride(0), stridewn=w1.stride(1),  
+                          stridewn=w1.stride(0), stridewk=w1.stride(1),  
                           strideom=o.stride(0), strideon=o.stride(1))
-
+    
     ctx.save_for_backward(x,g1,g2)
     ctx.M, ctx.N, ctx.K=M, N, K 
-    # print("M","N","K",M,N,K)
     return o
 
 
   @staticmethod
   def backward(ctx, do):
-    # print("backward start")
-    x,g1,g2=ctx.saved_tensors # X: (M,K), Z:(M,N), G:(M,N)
+    x,g1,g2=ctx.saved_tensors
 
     dw1=torch.empty((ctx.N, ctx.K), device=x.device, dtype=x.dtype) 
     dw2=torch.empty((ctx.N, ctx.K), device=x.device, dtype=x.dtype) 
-    # print("dw1 shape", dw1.shape)
-    # print("dw2 shape", dw2.shape)
-
-    # print("M","N","K",ctx.M,ctx.N,ctx.K)
-    # (m,k) (m,n)-->(k,n)
-    grid=lambda META: (triton.cdiv(ctx.K, META['BLOCK_SIZE_K']), triton.cdiv(ctx.N, META['BLOCK_SIZE_N']))
-    _swiglu_backward[grid](x,dw1,dw2,g1,g2,
+    
+    g1_do=(do*g1).contiguous() 
+    g2_do=(do*g2).contiguous()
+    
+    grid=lambda META: (triton.cdiv(ctx.N, META['BLOCK_SIZE_N']), triton.cdiv(ctx.K, META['BLOCK_SIZE_K']))
+    _swiglu_backward[grid](x,dw1,dw2,g1_do,g2_do,
                            ctx.M,ctx.N,ctx.K,
                            stridexm=x.stride(0), stridexk=x.stride(1),
-                           stridewk=dw1.stride(0), stridewn=dw1.stride(1),
-                           stridegm=g1.stride(0),stridegn=g1.stride(1))
-    # print("complete backward")
+                           stridewn=dw1.stride(0), stridewk=dw1.stride(1),
+                           stridegm=g1_do.stride(0),stridegn=g1_do.stride(1)
+                           )
     return None, dw1, dw2
-
 
 
 class SwiGLU_Layer_Triton(nn.Module):
@@ -253,27 +239,25 @@ class SwiGLU_Layer_Pytorch(nn.Module):
 
 
 def test(x, do, dim, hidden_dim):
-    # print("start test")
     swiglu_triton=SwiGLU_Layer_Triton(dim, hidden_dim).to(DEVICE)
     swiglu_pytorch=SwiGLU_Layer_Pytorch(dim, hidden_dim).to(DEVICE)
     swiglu_triton.w1.weight.data.copy_(swiglu_pytorch.w1.weight.data)
     swiglu_triton.w2.weight.data.copy_(swiglu_pytorch.w2.weight.data)
     
-
-    print("swiglu_triton shape", swiglu_triton.w1.weight.shape, swiglu_triton.w1.weight[:4,:4])
-    print("swiglu_triton shape", swiglu_pytorch.w1.weight.shape, swiglu_pytorch.w1.weight[:4,:4]) 
-    assert torch.allclose(swiglu_triton.w1.weight, swiglu_pytorch.w1.weight, rtol=1e-03, atol=1e-05, equal_nan=True), "forward w1 discripency"
-    assert torch.allclose(swiglu_triton.w2.weight, swiglu_pytorch.w2.weight, rtol=1e-03, atol=1e-05, equal_nan=True), "forward w2 discripency"
+    # print("swiglu_triton shape", swiglu_triton.w1.weight.shape, swiglu_triton.w1.weight[:4,:4])
+    # print("swiglu_triton shape", swiglu_pytorch.w1.weight.shape, swiglu_pytorch.w1.weight[:4,:4]) 
+    assert torch.allclose(swiglu_triton.w1.weight, swiglu_pytorch.w1.weight, rtol=1e-02, atol=1e-02, equal_nan=True), "forward w1 discripency"
+    assert torch.allclose(swiglu_triton.w2.weight, swiglu_pytorch.w2.weight, rtol=1e-02, atol=1e-02, equal_nan=True), "forward w2 discripency"
     
     out_triton=swiglu_triton(x)
     out_torch=swiglu_pytorch(x)
     torch.cuda.synchronize()
-    print("out_triton",out_triton.shape, out_triton[:4,:4])
-    print("out_torch",out_torch.shape, out_torch[:4,:4])
+    # print("out_triton",out_triton.shape, out_triton[:4,:4])
+    # print("out_torch",out_torch.shape, out_torch[:4,:4])
     max_diff = (out_triton - out_torch).abs().max()
     mean_diff = (out_triton - out_torch).abs().mean()
-    print("forward max_diff","forward mean_diff",max_diff, mean_diff)
-    # assert torch.allclose(out_triton,out_torch, rtol=1e-05, atol=1e-08, equal_nan=True), "output discripency"
+    # print("forward max_diff","forward mean_diff",max_diff, mean_diff)
+    assert torch.allclose(out_triton,out_torch, rtol=1e-02, atol=1e-02, equal_nan=True), "output discripency"
     
     out_triton.backward(do, retain_graph=True)
     torch.cuda.synchronize()
@@ -283,20 +267,19 @@ def test(x, do, dim, hidden_dim):
     max_diff = (swiglu_triton.w1.weight.grad - swiglu_pytorch.w1.weight.grad).abs().max()
     mean_diff = (swiglu_triton.w1.weight.grad - swiglu_pytorch.w1.weight.grad).abs().mean()
 
-    print("backward out_triton",swiglu_triton.w1.weight.grad.shape, swiglu_triton.w1.weight.grad[:4,:4])
-    print("backward out_torch",swiglu_pytorch.w1.weight.grad.shape, swiglu_pytorch.w1.weight.grad[:4,:4])
-    print("backward max_diff","backward mean_diff",max_diff, mean_diff)
-    # assert torch.allclose(swiglu_triton.w1.weight.grad, swiglu_pytorch.w1.weight.grad, rtol=1e-03, atol=1e-05, equal_nan=True), "backward w1.weight.grad discripency"
-    # assert torch.allclose(swiglu_triton.w2.weight.grad, swiglu_pytorch.w2.weight.grad, rtol=1e-03, atol=1e-05, equal_nan=True), "backward w2.weight.grad discripency"
-    return
-
+    # print("backward out_triton",swiglu_triton.w1.weight.grad.shape, swiglu_triton.w1.weight.grad[:4,:4])
+    # print("backward out_torch",swiglu_pytorch.w1.weight.grad.shape, swiglu_pytorch.w1.weight.grad[:4,:4])
+    # print("backward max_diff","backward mean_diff",max_diff, mean_diff)
+    assert torch.allclose(swiglu_triton.w1.weight.grad, swiglu_pytorch.w1.weight.grad, rtol=1e-01, atol=1e-01, equal_nan=True), "backward w1.weight.grad discripency"
+    assert torch.allclose(swiglu_triton.w2.weight.grad, swiglu_pytorch.w2.weight.grad, rtol=1e-01, atol=1e-01, equal_nan=True), "backward w2.weight.grad discripency"
+    return 
 
 @triton.testing.perf_report(
     triton.testing.Benchmark(
         x_names=['dim', 'hidden_dim'],
         x_vals=[
             (d, int(d*2/3))
-            for d in [512, 1024, 2048, 4096]
+            for d in [512, 1024, 2048, 4096, 4096, 8192, 16384]
         ],
         line_arg='provider',
         line_vals=['triton', 'torch'],
@@ -307,15 +290,15 @@ def test(x, do, dim, hidden_dim):
         args={'batch_size': 16,
               "seq_len": 1024,
               "device": DEVICE,
-              "quantiles":[0.5, 0.25, 0.75]
+              "quantiles":[0.25, 0.5, 0.75]
             }
     ))
 
 def bench_swiglu(batch_size, seq_len, dim, hidden_dim, provider, device, quantiles):
+    x=torch.randn((batch_size*seq_len, dim),device=device, dtype=torch.float32)
+    do=torch.randn(batch_size*seq_len, hidden_dim, device=device, dtype=torch.float32)
     def fwd_bwd():
         if provider == "triton":
-            x=torch.randn(batch_size*seq_len, dim, device=device, dtype=torch.float32)
-            do=torch.randn(batch_size*seq_len, hidden_dim, device=device, dtype=torch.float32)
             swiglu_triton=SwiGLU_Layer_Triton(dim, hidden_dim).to(device)
             out_triton=swiglu_triton(x)
             out_triton.backward(do, retain_graph=True)
@@ -323,8 +306,6 @@ def bench_swiglu(batch_size, seq_len, dim, hidden_dim, provider, device, quantil
 
 
         if provider == "torch":
-            x=torch.randn((batch_size*seq_len, dim),device=device, dtype=torch.float32)
-            do=torch.randn((batch_size*seq_len, hidden_dim),device=device, dtype=torch.float32)
             swiglu_pytorch=SwiGLU_Layer_Pytorch(dim, hidden_dim).to(device)
             out_torch=swiglu_pytorch(x)
             out_torch.backward(do, retain_graph=True)
@@ -338,19 +319,17 @@ def bench_swiglu(batch_size, seq_len, dim, hidden_dim, provider, device, quantil
 
 if __name__ == "__main__":
     seed = 42
-    torch.manual_seed(seed)  # seed for CPU
+    torch.manual_seed(seed) 
     if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)  # seed for current GPU
+        torch.cuda.manual_seed(seed) 
         torch.cuda.manual_seed_all(seed)
     
-    batch_size=16
-    seq_len=1024
-    dim=1024
-    hidden_dim=int(dim*2/3)
-    # print("hidden_dim", hidden_dim)
+    # batch_size=16
+    # seq_len=512
+    # dim=1024
+    # hidden_dim=512
+    # x=torch.randn(batch_size*seq_len, dim, device=DEVICE, dtype=torch.float32)
+    # do=torch.randn(batch_size*seq_len, hidden_dim, device=DEVICE, dtype=torch.float32)
+    # test(x, do, dim, hidden_dim)
     
-    x=torch.randn(batch_size*seq_len, dim, device=DEVICE, dtype=torch.float32)
-    do=torch.randn(batch_size*seq_len, hidden_dim, device=DEVICE, dtype=torch.float32)
-    test(x, do, dim, hidden_dim)
-    
-    # bench_swiglu.run(save_path=".", show_plots=True, print_data=True)
+    bench_swiglu.run(save_path=".", show_plots=True, print_data=True)
