@@ -15,7 +15,25 @@ def is_cuda():
 
 
 def get_cuda_autotune_config():
-    return [triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32})]
+    return [
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64}),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 32}),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32}),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32}),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 32}),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32}),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 32}),
+        triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 32}),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128}),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 128}),
+        triton.Config({'BLOCK_SIZE_M': 256, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 128}),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 128}),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 128}),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 64, 'BLOCK_SIZE_K': 64}),
+        triton.Config({'BLOCK_SIZE_M': 64, 'BLOCK_SIZE_N': 128, 'BLOCK_SIZE_K': 64}),
+        triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 32, 'BLOCK_SIZE_K': 64})
+    ]
+
 
 
 def get_hip_autotune_config():
@@ -244,19 +262,15 @@ def test(x, do, dim, hidden_dim):
     swiglu_triton.w1.weight.data.copy_(swiglu_pytorch.w1.weight.data)
     swiglu_triton.w2.weight.data.copy_(swiglu_pytorch.w2.weight.data)
     
-    # print("swiglu_triton shape", swiglu_triton.w1.weight.shape, swiglu_triton.w1.weight[:4,:4])
-    # print("swiglu_triton shape", swiglu_pytorch.w1.weight.shape, swiglu_pytorch.w1.weight[:4,:4]) 
     assert torch.allclose(swiglu_triton.w1.weight, swiglu_pytorch.w1.weight, rtol=1e-02, atol=1e-02, equal_nan=True), "forward w1 discripency"
     assert torch.allclose(swiglu_triton.w2.weight, swiglu_pytorch.w2.weight, rtol=1e-02, atol=1e-02, equal_nan=True), "forward w2 discripency"
     
     out_triton=swiglu_triton(x)
     out_torch=swiglu_pytorch(x)
     torch.cuda.synchronize()
-    # print("out_triton",out_triton.shape, out_triton[:4,:4])
-    # print("out_torch",out_torch.shape, out_torch[:4,:4])
+
     max_diff = (out_triton - out_torch).abs().max()
     mean_diff = (out_triton - out_torch).abs().mean()
-    # print("forward max_diff","forward mean_diff",max_diff, mean_diff)
     assert torch.allclose(out_triton,out_torch, rtol=1e-02, atol=1e-02, equal_nan=True), "output discripency"
     
     out_triton.backward(do, retain_graph=True)
@@ -267,9 +281,6 @@ def test(x, do, dim, hidden_dim):
     max_diff = (swiglu_triton.w1.weight.grad - swiglu_pytorch.w1.weight.grad).abs().max()
     mean_diff = (swiglu_triton.w1.weight.grad - swiglu_pytorch.w1.weight.grad).abs().mean()
 
-    # print("backward out_triton",swiglu_triton.w1.weight.grad.shape, swiglu_triton.w1.weight.grad[:4,:4])
-    # print("backward out_torch",swiglu_pytorch.w1.weight.grad.shape, swiglu_pytorch.w1.weight.grad[:4,:4])
-    # print("backward max_diff","backward mean_diff",max_diff, mean_diff)
     assert torch.allclose(swiglu_triton.w1.weight.grad, swiglu_pytorch.w1.weight.grad, rtol=1e-01, atol=1e-01, equal_nan=True), "backward w1.weight.grad discripency"
     assert torch.allclose(swiglu_triton.w2.weight.grad, swiglu_pytorch.w2.weight.grad, rtol=1e-01, atol=1e-01, equal_nan=True), "backward w2.weight.grad discripency"
     return 
