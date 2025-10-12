@@ -188,7 +188,7 @@ def _swiglu_backward(
     tl.store(dw2_ptrs, dw2_acc, mask=mask_w)
     return 
 
-class SwiGLU(torch.autograd.Function):
+class SwiGLUFUNC(torch.autograd.Function):
   @staticmethod
   def forward(ctx,x,w1,w2):
     M, K=x.shape 
@@ -237,10 +237,10 @@ class SwiGLU_Layer_Triton(nn.Module):
     super().__init__()
     self.w1=nn.Linear(dim, hidden_dim, bias=False)
     self.w2=nn.Linear(dim, hidden_dim, bias=False)
-    self.swiglu=SwiGLU.apply
+    self.swiglufunc=SwiGLUFUNC.apply
 
   def forward(self,x):
-    return self.swiglu(x, self.w1.weight, self.w2.weight)
+    return self.swiglufunc(x, self.w1.weight, self.w2.weight)
 
 
 class SwiGLU_Layer_Pytorch(nn.Module):
