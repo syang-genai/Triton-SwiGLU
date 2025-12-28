@@ -4,11 +4,18 @@
 * Solution: Developed a custom fused Triton kernel that optimized the kernal fusion to reduce GPU memory consumption, specifically reduced the parameters saved in forward process for performing backpropagation and perform inplace parameter saving. 
 * Result: Achieved 32% memory reduction at sequence length 16000, while maintain the forward calculation speed and accelerate backward calculation speed by 3.3%.
 
-<img src="swiglu_memory_full.png" alt="Description of Image" width="500" height="300">
-<img src="swiglu_speed_backward.png" alt="Description of Image" width="500" height="300">
-<img src="swiglu_speed_forward.png" alt="Description of Image" width="500" height="300">
-
 <figure>
   <img src="swiglu_memory_full.png" alt="Description of Image" width="50%">
   <figcaption>Your caption goes here.</figcaption>
 </figure>
+
+<figure>
+  <img src="swiglu_speed_backward.png" alt="Description of Image" width="50%">
+  <figcaption>Your caption goes here.</figcaption>
+</figure>
+
+<figure>
+  <img src="swiglu_speed_forward.png" alt="Description of Image" width="50%">
+  <figcaption>Your caption goes here.</figcaption>
+</figure>
+
