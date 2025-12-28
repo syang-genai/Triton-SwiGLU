@@ -8,12 +8,7 @@
 <img src="swiglu_speed_backward.png" alt="Description of Image" width="500" height="300">
 <img src="swiglu_speed_forward.png" alt="Description of Image" width="500" height="300">
 
-![benchmark image](swiglu_memory_full.png)
-![benchmark image](swiglu_speed_backward.png)
-![benchmark image](swiglu_speed_forward.png)
-
-
-
-
-
-
+<figure>
+  <img src="swiglu_memory_full.png" alt="Description of Image" width="50%">
+  <figcaption>Your caption goes here.</figcaption>
+</figure>
