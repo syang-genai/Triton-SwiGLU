@@ -5,9 +5,13 @@
 * Result: Achieved 32% memory reduction at sequence length 16000, while maintain the forward calculation speed and accelerate backward calculation speed by 3.3%.
 
 <img src="swiglu_memory_full.png" alt="Description of Image" width="500" height="300">
+<img src="swiglu_speed_backward.png" alt="Description of Image" width="500" height="300">
+<img src="swiglu_speed_forward.png" alt="Description of Image" width="500" height="300">
+
 ![benchmark image](swiglu_memory_full.png)
 ![benchmark image](swiglu_speed_backward.png)
 ![benchmark image](swiglu_speed_forward.png)
+
 
 
 
