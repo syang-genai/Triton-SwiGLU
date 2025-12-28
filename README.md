@@ -1,4 +1,4 @@
-# Accelerating SwiGLU with Custom Triton Kernel Fusion
+# Reducing SwiGLU Peak Memory via Triton Kernel Fusion 
 In LLMs, the Feed-Forward Network (FFN), a core component of each Transformer block, typically comprises the majority of model parameters—often 50–60% or more. During training, FFN activation memory scales linearly with sequence length, making it an important target for memory optimization.
 
 * **Challenge**: The challenge is to further optimize memory usage for SwiGLU layers while maintaining training and inference speed, leveraging the optimized kernels already provided by PyTorch.
@@ -9,17 +9,18 @@ In LLMs, the Feed-Forward Network (FFN), a core component of each Transformer bl
 
 <figure>
   <img src="swiglu_memory_full.png" alt="Description of Image" width="50%">
-  <figcaption>Your caption goes here.</figcaption>
+  <figcaption>Swiglu Peak Memory Usage.</figcaption>
 </figure>
 
 <figure>
   <img src="swiglu_speed_backward.png" alt="Description of Image" width="50%">
-  <figcaption>Your caption goes here.</figcaption>
+  <figcaption>Swiglu Backward Speed.</figcaption>
 </figure>
 
 <figure>
   <img src="swiglu_speed_forward.png" alt="Description of Image" width="50%">
-  <figcaption>Your caption goes here.</figcaption>
+  <figcaption>Swiglu Forward Speed.</figcaption>
 </figure>
+
 
 
