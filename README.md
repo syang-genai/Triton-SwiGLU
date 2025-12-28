@@ -1,8 +1,11 @@
 # Accelerating SwiGLU with Custom Triton Kernel Fusion
-* Context: SwiGLU activation in large model contains %of paramters for LLMs. 
-* Challenge: Reduce the memory consumption for SwiGLU layers, without deminishing the training or inference speed. 
-* Solution: Developed a custom fused Triton kernel that optimized the kernal fusion to reduce GPU memory consumption, specifically reduced the parameters saved in forward process for performing backpropagation and perform inplace parameter saving. 
-* Result: Achieved 32% memory reduction at sequence length 16000, while maintain the forward calculation speed and accelerate backward calculation speed by 3.3%.
+In LLMs, the Feed-Forward Network (FFN), a core component of each Transformer block, typically comprises the majority of model parameters—often 50–60% or more. During training, FFN activation memory scales linearly with sequence length, making it an important target for memory optimization.
+
+* **Challenge**: The challenge is to further optimize memory usage for SwiGLU layers while maintaining training and inference speed, leveraging the optimized kernels already provided by PyTorch.
+  
+* **Solution**: Use Triton to implement a fused SwiGLU kernel that optimizes activation memory usage, specifically by reducing the intermediate activations stored during the forward pass for backpropagation and performing in-place parameter updates.
+
+* **Benchmark**: Reduced memory usage by **32%** at sequence length 16,000, maintaining forward speed and improving backward speed by **3.3%**. 
 
 <figure>
   <img src="swiglu_memory_full.png" alt="Description of Image" width="50%">
@@ -18,4 +21,5 @@
   <img src="swiglu_speed_forward.png" alt="Description of Image" width="50%">
   <figcaption>Your caption goes here.</figcaption>
 </figure>
+
 
