@@ -4,4 +4,6 @@
 * Solution: Developed a custom fused Triton kernel to merge multiple operations, minimizing I/O and improving execution efficiency. 
 * Result: Achieved 30% speedup at dim=8192, accelerating both forward and backward passes.
 
-![benchmark image](SwiGLU.png)
+![benchmark image](swiglu_memory_full.png)
+![benchmark image](swiglu_speed_backward.png)
+![benchmark image](swiglu_speed_forward.png)
