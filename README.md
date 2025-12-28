@@ -7,20 +7,24 @@ In LLMs, the Feed-Forward Network (FFN), a core component of each Transformer bl
 
 * **Benchmark**: Reduced memory usage by **32%** at sequence length 16,000, maintaining forward speed and improving backward speed by **3.3%**. 
 
-<figure>
-  <img src="swiglu_memory_full.png" alt="Description of Image" width="50%">
-  <figcaption>Swiglu Peak Memory Usage.</figcaption>
-</figure>
+<div style="text-align: center">
+  <img src="swiglu_memory_full.png" alt="SwiGLU Memory Optimization" width="50%"/>
+  <p> Figure 1: Peak memory reduction for SwiGLU using Triton kernel fusion. </p>
+</div>
 
-<figure>
-  <img src="swiglu_speed_backward.png" alt="Description of Image" width="50%">
-  <figcaption>Swiglu Backward Speed.</figcaption>
-</figure>
+<div style="text-align: center">
+  <img src="swiglu_speed_backward.png" alt="SwiGLU Memory Optimization" width="50%"/>
+  <p> Figure 2: SwiGLU backward computation speed increased by 3.3%. </p>
+</div>
 
-<figure>
-  <img src="swiglu_speed_forward.png" alt="Description of Image" width="50%">
-  <figcaption>Swiglu Forward Speed.</figcaption>
-</figure>
+<div style="text-align: center">
+  <img src="swiglu_speed_forward.png" alt="SwiGLU Memory Optimization" width="50%"/>
+  <p> Figure 3: SwiGLU forward computation speed remained unchanged. </p>
+</div>
+
+
+
+
 
 
 
