@@ -58,7 +58,7 @@ def _swiglu_forward_kernel(
     )
 
     gate=tl.load(gate_block_ptr, boundary_check=(0,1)).to(tl.float32)
-    up=tl.load(gate_block_ptr, boundary_check=(0,1))
+    up=tl.load(up_block_ptr, boundary_check=(0,1))
     
     # sigmoid requires type float32
     gate_sigmoid=tl.sigmoid(gate)
